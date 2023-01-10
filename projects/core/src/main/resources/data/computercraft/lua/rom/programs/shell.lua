@@ -54,6 +54,47 @@ else
     bgColour = colours.black
 end
 
+local function run_file(env, path, ...)
+    setmetatable(env, { __index = _G })
+
+    local file, err = fs.open(path, "r")
+    if not file then
+        printError(err)
+        return false
+    end
+
+    local contents = file.readAll()
+    file.close()
+
+    local func, err = load(contents, "@" .. fs.getName(path), nil, env)
+    if not func then
+        -- We had a syntax error. Attempt to run it through our own parser if
+        -- the file is "small enough", otherwise report the original error.
+        if #contents < 1024 * 128 then
+            local parser = require "cc.internal.syntax"
+            if parser.parse(contents) then printError(err) end
+        else
+            printError(contents)
+        end
+
+        return false
+    end
+
+    if settings.get("bios.strict_globals", false) then
+        getmetatable(env).__newindex = function(_, name)
+            error("Attempt to create global " .. tostring(name), 2)
+        end
+    end
+
+    local ok, err = pcall(func, ...)
+    if ok then
+        return true
+    else
+        if err and err ~= "" then printError(err) end
+        return false
+    end
+end
+
 --- Run a program with the supplied arguments.
 --
 -- Unlike @{shell.run}, each argument is passed to the program verbatim. While
@@ -87,7 +128,7 @@ function shell.execute(command, ...)
         local sDir = fs.getDir(sPath)
         local env = createShellEnv(sDir)
         env.arg = { [0] = command, ... }
-        local result = os.run(env, sPath, ...)
+        local result = run_file(env, sPath, ...)
 
         tProgramStack[#tProgramStack] = nil
         if multishell then
